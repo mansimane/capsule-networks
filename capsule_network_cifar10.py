@@ -84,9 +84,13 @@ class CapsuleNet(nn.Module):
     def __init__(self):
         super(CapsuleNet, self).__init__()
 
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=256, kernel_size=9, stride=1)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=256, kernel_size=9, stride=1)
+        # For MNIst : 256x 20 x 20
+        # For CIFAR: 256 x 24 x 24
         self.primary_capsules = CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=256, out_channels=32,
                                              kernel_size=9, stride=2)
+        # MNIST: 32 x 6 x 6 (20-9)/2 + 1
+        # #
         self.digit_capsules = CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=32 * 6 * 6, in_channels=8,
                                            out_channels=16)
 
@@ -142,7 +146,7 @@ if __name__ == "__main__":
     from torchnet.engine import Engine
     from torchnet.logger import VisdomPlotLogger, VisdomLogger
     from torchvision.utils import make_grid
-    from torchvision.datasets.mnist import MNIST
+    from torchvision.datasets.CIFAR10 import CIFAR10
     from tqdm import tqdm
     import torchnet as tnt
 
@@ -173,7 +177,7 @@ if __name__ == "__main__":
 
 
     def get_iterator(mode):
-        dataset = MNIST(root='./data', download=True, train=mode)
+        dataset = CIFAR10(root='./data', download=True, train=mode)
         data = getattr(dataset, 'train_data' if mode else 'test_data')
         labels = getattr(dataset, 'train_labels' if mode else 'test_labels')
         tensor_dataset = tnt.dataset.TensorDataset([data, labels])
