@@ -11,6 +11,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import numpy as np
+import os
+DATA_DIR = 'data_cifar10'
+CP_DIR = 'checkpoints_cifar10'
+
+if not os.path.isdir(CP_DIR):
+    os.mkdir(CP_DIR)
 
 BATCH_SIZE = 100
 NUM_CLASSES = 10
@@ -90,8 +96,8 @@ class CapsuleNet(nn.Module):
         self.primary_capsules = CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=256, out_channels=32,
                                              kernel_size=9, stride=2)
         # MNIST: 32 x 6 x 6 (20-9)/2 + 1
-        # #
-        self.digit_capsules = CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=32 * 6 * 6, in_channels=8,
+        # CIFAR: 32 x 8 x 8 (24-9)/2 + 1
+        self.digit_capsules = CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=32 * 8 * 8, in_channels=8,
                                            out_channels=16)
 
         self.decoder = nn.Sequential(
@@ -99,7 +105,9 @@ class CapsuleNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(512, 1024),
             nn.ReLU(inplace=True),
-            nn.Linear(1024, 784),
+            # MNIST: 28 x 28 = 784
+            # CIFAR: 32 x 32 x 3
+            nn.Linear(1024, 32 * 32 *3),
             nn.Sigmoid()
         )
 
@@ -146,7 +154,7 @@ if __name__ == "__main__":
     from torchnet.engine import Engine
     from torchnet.logger import VisdomPlotLogger, VisdomLogger
     from torchvision.utils import make_grid
-    from torchvision.datasets.CIFAR10 import CIFAR10
+    from torchvision.datasets.cifar import CIFAR10
     from tqdm import tqdm
     import torchnet as tnt
 
@@ -177,7 +185,7 @@ if __name__ == "__main__":
 
 
     def get_iterator(mode):
-        dataset = CIFAR10(root='./data', download=True, train=mode)
+        dataset = CIFAR10(root=DATA_DIR, download=True, train=mode)
         data = getattr(dataset, 'train_data' if mode else 'test_data')
         labels = getattr(dataset, 'train_labels' if mode else 'test_labels')
         tensor_dataset = tnt.dataset.TensorDataset([data, labels])
@@ -187,8 +195,13 @@ if __name__ == "__main__":
 
     def processor(sample):
         data, labels, training = sample
-
-        data = augmentation(data.unsqueeze(1).float() / 255.0)
+        # MNIST: data.shape = (N, H, W)
+        # CIFAR: data.shape = (N, H, W, 3)
+        assert data.shape[1:] == (32, 32, 3), data.shape
+        # Change to PyTorch C x H x W. data is ByteTensor.
+        data = data.permute(0, 3, 1, 2)
+        assert data.shape[1:] == (3, 32, 32), data.shape
+        data = augmentation(data.float() / 255.0)
         labels = torch.LongTensor(labels)
 
         labels = torch.sparse.torch.eye(NUM_CLASSES).index_select(dim=0, index=labels)
@@ -244,13 +257,14 @@ if __name__ == "__main__":
         print('[Epoch %d] Testing Loss: %.4f (Accuracy: %.2f%%)' % (
             state['epoch'], meter_loss.value()[0], meter_accuracy.value()[0]))
 
-        torch.save(model.state_dict(), 'epochs/epoch_%d.pt' % state['epoch'])
+        torch.save(model.state_dict(), os.path.join(CP_DIR, 'epoch_%d.pt' % state['epoch']))
 
         # Reconstruction visualization.
 
         test_sample = next(iter(get_iterator(False)))
 
-        ground_truth = (test_sample[0].unsqueeze(1).float() / 255.0)
+        # ground_truth = (test_sample[0].unsqueeze(1).float() / 255.0)
+        ground_truth = (test_sample[0].permute(0, 3, 1, 2).float() / 255.0)
         _, reconstructions = model(Variable(ground_truth).cuda())
         reconstruction = reconstructions.cpu().view_as(ground_truth).data
 
