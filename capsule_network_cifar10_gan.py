@@ -16,6 +16,8 @@ import os
 
 DATA_DIR = 'data_cifar10'
 CP_DIR = 'checkpoints_cifar10_gan'
+USE_D = True
+LR = 1e-3
 
 if not os.path.isdir(CP_DIR):
     os.mkdir(CP_DIR)
@@ -272,22 +274,33 @@ if __name__ == "__main__":
     print("# parameters:", sum(param.numel() for param in model.parameters()))
 
     caps_optimizer = Adam(model.parameters())
-    d_optimizer = Adam(discriminator.parameters())
+    d_optimizer = Adam(discriminator.parameters(), lr=1e-6)
+    # How should we train discriminator differently?
+    # 1. Use SGD for discriminator
+    # 2. Learning rate
+    # 3. Alternate: train discriminator every N epochs
 
     engine = Engine()
     meter_loss = tnt.meter.AverageValueMeter()
     meter_accuracy = tnt.meter.ClassErrorMeter(accuracy=True)
     confusion_meter = tnt.meter.ConfusionMeter(NUM_CLASSES, normalized=True)
 
-    train_loss_logger = VisdomPlotLogger('line', opts={'title': 'Train Loss'})
-    train_error_logger = VisdomPlotLogger('line', opts={'title': 'Train Accuracy'})
-    test_loss_logger = VisdomPlotLogger('line', opts={'title': 'Test Loss'})
-    test_accuracy_logger = VisdomPlotLogger('line', opts={'title': 'Test Accuracy'})
-    confusion_logger = VisdomLogger('heatmap', opts={'title': 'Confusion matrix',
+    meter_d_loss = tnt.meter.AverageValueMeter()
+    meter_d_accuracy = tnt.meter.ClassErrorMeter(accuracy=True)
+
+    suffix = '-GAN'
+    train_loss_logger = VisdomPlotLogger('line', opts={'title': 'Train Loss' + suffix})
+    train_error_logger = VisdomPlotLogger('line', opts={'title': 'Train Accuracy'+ suffix})
+    test_loss_logger = VisdomPlotLogger('line', opts={'title': 'Test Loss'+ suffix})
+    test_accuracy_logger = VisdomPlotLogger('line', opts={'title': 'Test Accuracy'+ suffix})
+    confusion_logger = VisdomLogger('heatmap', opts={'title': 'Confusion matrix'+ suffix,
                                                      'columnnames': list(range(NUM_CLASSES)),
                                                      'rownames': list(range(NUM_CLASSES))})
-    ground_truth_logger = VisdomLogger('image', opts={'title': 'Ground Truth'})
-    reconstruction_logger = VisdomLogger('image', opts={'title': 'Reconstruction'})
+    ground_truth_logger = VisdomLogger('image', opts={'title': 'Ground Truth'+ suffix})
+    reconstruction_logger = VisdomLogger('image', opts={'title': 'Reconstruction'+ suffix})
+
+    d_loss_logger = VisdomPlotLogger('line', opts={'title': "D Loss"+ suffix})
+    d_accuracy_logger = VisdomPlotLogger('line', opts={'title': "D Accuracy"+ suffix})
 
     capsule_loss = CapsuleLoss()
     d_loss = nn.BCELoss()
@@ -297,6 +310,9 @@ if __name__ == "__main__":
         dataset = CIFAR10(root=DATA_DIR, download=True, train=mode)
         data = getattr(dataset, 'train_data' if mode else 'test_data')
         labels = getattr(dataset, 'train_labels' if mode else 'test_labels')
+        # data = data[:1000]
+        # labels = labels[:1000]
+
         tensor_dataset = tnt.dataset.TensorDataset([data, labels])
 
         return tensor_dataset.parallel(batch_size=BATCH_SIZE, num_workers=4, shuffle=mode)
@@ -324,50 +340,64 @@ if __name__ == "__main__":
             classes, reconstructions = model(data)
 
         caps_loss = capsule_loss(data, labels, classes, reconstructions.view(reconstructions.shape[0], -1))
+        loss = caps_loss
 
-        ###############################
-        # Add discriminator loss
-        ###############################
-        real_label = 1
-        fake_label = 0
-        # train with real
-        batch_size = data.shape[0]
-        label = torch.full((batch_size,), real_label).cuda()
+        if USE_D and training:
+            ###############################
+            # Add discriminator loss
+            ###############################
+            real_label = 1
+            fake_label = 0
+            # train with real
+            batch_size = data.shape[0]
+            label = torch.full((batch_size,), real_label).cuda()
 
-        output = discriminator(data)
-        errD_real = d_loss(output, label)
+            output = discriminator(data)
+            errD_real = d_loss(output, label)
 
-        # D_x = output.mean().item()
+            output_np = output.data.cpu().numpy()
+            meter_d_accuracy.add( np.stack((1 - output_np, output_np), axis=1), label)
 
-        # train with fake
-        label = torch.full((batch_size,), fake_label).cuda()
-        # label.fill_(fake_label)
-        output = discriminator(reconstructions.detach())
-        errD_fake = d_loss(output, label)
-        # D_G_z1 = output.mean().item()
-        errD = 0.5 * (errD_real + errD_fake)
+            # D_x = output.mean().item()
 
-        # Update discriminator weights here
-        d_optimizer.zero_grad()
-        errD.backward()
-        d_optimizer.step()
+            # train with fake
+            label = torch.full((batch_size,), fake_label).cuda()
+            # label.fill_(fake_label)
+            output = discriminator(reconstructions.detach())
+            errD_fake = d_loss(output, label)
+            # D_G_z1 = output.mean().item()
+            errD = 0.5 * (errD_real + errD_fake)
 
-        ###############################
-        # Add generator loss
-        ###############################
-        # label.fill_(real_label)  # fake labels are real for generator cost
-        label = torch.full((batch_size,), real_label).cuda()
-        output = discriminator(reconstructions)
-        errG = d_loss(output, label)
+            # Update discriminator weights here
+            d_optimizer.zero_grad()
+            errD.backward()
+            d_optimizer.step()
+
+            output_np = output.data.cpu().numpy()
+            meter_d_accuracy.add( np.stack((1 - output_np, output_np), axis=1), label)
+
+            meter_d_loss.add(errD.data[0])
+
+            ###############################
+            # Add generator loss
+            ###############################
+            # label.fill_(real_label)  # fake labels are real for generator cost
+            label = torch.full((batch_size,), real_label).cuda()
+            output = discriminator(reconstructions)
+            errG = d_loss(output, label)
+            loss = loss + errG
 
         # D_G_z2 = output.mean().item()
 
-        return caps_loss + errG, classes
+        return loss, classes
 
     def reset_meters():
         meter_accuracy.reset()
         meter_loss.reset()
         confusion_meter.reset()
+        if USE_D:
+            meter_d_loss.reset()
+            meter_d_accuracy.reset()
 
 
     def on_sample(state):
@@ -391,6 +421,10 @@ if __name__ == "__main__":
 
         train_loss_logger.log(state['epoch'], meter_loss.value()[0])
         train_error_logger.log(state['epoch'], meter_accuracy.value()[0])
+
+        if USE_D:
+            d_loss_logger.log(state['epoch'], meter_d_loss.value()[0])
+            d_accuracy_logger.log(state['epoch'], meter_d_accuracy.value()[0])
 
         reset_meters()
 
