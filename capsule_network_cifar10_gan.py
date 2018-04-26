@@ -385,7 +385,7 @@ if __name__ == "__main__":
             label = torch.full((batch_size,), real_label).cuda()
             output = discriminator(reconstructions)
             errG = d_loss(output, label)
-            loss = loss + errG
+            loss = loss + errG * 0.001
 
         # D_G_z2 = output.mean().item()
 
