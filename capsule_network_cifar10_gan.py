@@ -6,6 +6,7 @@ PyTorch implementation by Kenta Iwasaki @ Gram.AI.
 """
 import sys
 
+
 sys.setrecursionlimit(15000)
 
 import torch
@@ -17,12 +18,14 @@ import os
 DATA_DIR = 'data_cifar10'
 CP_DIR = 'checkpoints_cifar10_gan'
 USE_D = True
-LR = 1e-3
+CAPS_LR = 1e-4
+D_LR = 1e-5
 
 if not os.path.isdir(CP_DIR):
     os.mkdir(CP_DIR)
 
-BATCH_SIZE = 100
+BATCH_SIZE = 32
+TEST_BATCH_SIZE = 100
 NUM_CLASSES = 10
 NUM_EPOCHS = 500
 NUM_ROUTING_ITERATIONS = 3
@@ -252,9 +255,12 @@ class CapsuleLoss(nn.Module):
 #         for opti in self.optimizers:
 #             opti.zero_grad()
 
+global_epoch = 0
+# load_checkpoint = 'chkpt_test_acc60.pt'
+load_checkpoint = ''
 if __name__ == "__main__":
     from torch.autograd import Variable
-    from torch.optim import Adam
+    from torch.optim import Adam, SGD
     from torchnet.engine import Engine
     from torchnet.logger import VisdomPlotLogger, VisdomLogger
     from torchvision.utils import make_grid
@@ -263,7 +269,10 @@ if __name__ == "__main__":
     import torchnet as tnt
 
     model = CapsuleNet()
-    # model.load_state_dict(torch.load('epochs/epoch_327.pt'))
+    if load_checkpoint:
+        load_checkpoint = os.path.join(CP_DIR, load_checkpoint)
+        model.load_state_dict(torch.load(load_checkpoint))
+        print("Loaded checkpoint from {}".format(load_checkpoint))
     model.cuda()
 
     # Define discriminator separately
@@ -273,8 +282,9 @@ if __name__ == "__main__":
 
     print("# parameters:", sum(param.numel() for param in model.parameters()))
 
-    caps_optimizer = Adam(model.parameters())
-    d_optimizer = Adam(discriminator.parameters(), lr=1e-6)
+    caps_optimizer = Adam(model.parameters(), lr=CAPS_LR)
+    # d_optimizer = Adam(discriminator.parameters(), lr=1e-6)
+    d_optimizer = SGD(discriminator.parameters(), lr=D_LR)
     # How should we train discriminator differently?
     # 1. Use SGD for discriminator
     # 2. Learning rate
@@ -315,7 +325,9 @@ if __name__ == "__main__":
 
         tensor_dataset = tnt.dataset.TensorDataset([data, labels])
 
-        return tensor_dataset.parallel(batch_size=BATCH_SIZE, num_workers=4, shuffle=mode)
+        return tensor_dataset.parallel(batch_size=BATCH_SIZE if mode else TEST_BATCH_SIZE,
+                                       num_workers=4,
+                                       shuffle=mode)
 
 
     def processor(sample):
@@ -342,7 +354,7 @@ if __name__ == "__main__":
         caps_loss = capsule_loss(data, labels, classes, reconstructions.view(reconstructions.shape[0], -1))
         loss = caps_loss
 
-        if USE_D and training:
+        if USE_D and training and global_epoch >= 1:
             ###############################
             # Add discriminator loss
             ###############################
@@ -376,7 +388,7 @@ if __name__ == "__main__":
             output_np = output.data.cpu().numpy()
             meter_d_accuracy.add( np.stack((1 - output_np, output_np), axis=1), label)
 
-            meter_d_loss.add(errD.data[0])
+            meter_d_loss.add(errD.data.item())
 
             ###############################
             # Add generator loss
@@ -407,7 +419,7 @@ if __name__ == "__main__":
     def on_forward(state):
         meter_accuracy.add(state['output'].data, torch.LongTensor(state['sample'][1]))
         confusion_meter.add(state['output'].data, torch.LongTensor(state['sample'][1]))
-        meter_loss.add(state['loss'].data[0])
+        meter_loss.add(state['loss'].data.item())
 
 
     def on_start_epoch(state):
@@ -416,6 +428,8 @@ if __name__ == "__main__":
 
 
     def on_end_epoch(state):
+        global global_epoch
+        global_epoch += 1
         print('[Epoch %d] Training Loss: %.4f (Accuracy: %.2f%%)' % (
             state['epoch'], meter_loss.value()[0], meter_accuracy.value()[0]))
 
@@ -423,8 +437,11 @@ if __name__ == "__main__":
         train_error_logger.log(state['epoch'], meter_accuracy.value()[0])
 
         if USE_D:
-            d_loss_logger.log(state['epoch'], meter_d_loss.value()[0])
-            d_accuracy_logger.log(state['epoch'], meter_d_accuracy.value()[0])
+            try:
+                d_loss_logger.log(state['epoch'], meter_d_loss.value()[0])
+                d_accuracy_logger.log(state['epoch'], meter_d_accuracy.value()[0])
+            except Exception as e:
+                print(e)
 
         reset_meters()
 
@@ -448,9 +465,9 @@ if __name__ == "__main__":
         reconstruction = reconstructions.cpu().view_as(ground_truth).data
 
         ground_truth_logger.log(
-            make_grid(ground_truth, nrow=int(BATCH_SIZE ** 0.5), normalize=True, range=(0, 1)).numpy())
+            make_grid(ground_truth, nrow=int(TEST_BATCH_SIZE ** 0.5), normalize=True, range=(0, 1)).numpy())
         reconstruction_logger.log(
-            make_grid(reconstruction, nrow=int(BATCH_SIZE ** 0.5), normalize=True, range=(0, 1)).numpy())
+            make_grid(reconstruction, nrow=int(TEST_BATCH_SIZE ** 0.5), normalize=True, range=(0, 1)).numpy())
 
 
     # def on_start(state):
