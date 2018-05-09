@@ -16,7 +16,7 @@ import numpy as np
 import os
 
 DATA_DIR = 'data_cifar10'
-CP_DIR = 'checkpoints_cifar10_gan'
+CP_DIR = 'checkpoints_cifar10_gan_64'
 USE_D = True
 CAPS_LR = 1e-4
 D_LR = 1e-5
@@ -30,7 +30,6 @@ TEST_BATCH_SIZE = 100
 NUM_CLASSES = 10
 NUM_EPOCHS = 500
 NUM_ROUTING_ITERATIONS = 3
-
 
 
 # Constants for DCGAN
@@ -180,11 +179,11 @@ class CapsuleNet(nn.Module):
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=256, kernel_size=9, stride=1)
         # For MNIst : 256x 20 x 20
         # For CIFAR: 256 x 24 x 24
-        self.primary_capsules = CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=256, out_channels=32,
+        self.primary_capsules = CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=256, out_channels=64,
                                              kernel_size=9, stride=2)
         # MNIST: 32 x 6 x 6 (20-9)/2 + 1
         # CIFAR: 32 x 8 x 8 (24-9)/2 + 1
-        self.digit_capsules = CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=32 * 8 * 8, in_channels=8,
+        self.digit_capsules = CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=64 * 8 * 8, in_channels=8,
                                            out_channels=16)
 
         # self.decoder = nn.Sequential(
@@ -257,8 +256,8 @@ class CapsuleLoss(nn.Module):
 #             opti.zero_grad()
 
 global_epoch = 0
-load_checkpoint = 'chkpt_test_acc20.pt'
-# load_checkpoint = ''
+# load_checkpoint = 'chkpt_test_acc20.pt'
+load_checkpoint = ''
 d_accuracy_prev = 0.
 
 if __name__ == "__main__":
